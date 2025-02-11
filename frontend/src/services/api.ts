@@ -2,31 +2,62 @@ import { Device, CreateWidgetData, Widget } from '../types/types';
 
 const API_BASE_URL = import.meta.env.VITE_API_URL || 'http://localhost:5001/api';
 
+// Función helper para verificar la conexión
+const checkApiConnection = async () => {
+  try {
+    const response = await fetch(`${API_BASE_URL}/health`);
+    return response.ok;
+  } catch (error) {
+    console.error('API connection check failed:', error);
+    return false;
+  }
+};
+
+// Función helper para manejar errores de fetch
+const handleFetchError = (error: any, endpoint: string) => {
+  if (error instanceof TypeError && error.message === 'Failed to fetch') {
+    console.error(`Connection error to ${endpoint}. Please check if the backend server is running.`);
+    throw new Error(`Unable to connect to the server. Please ensure the backend is running at ${API_BASE_URL}`);
+  }
+  throw error;
+};
+
 export const deviceService = {
   // Obtener todos los dispositivos
   getDevices: async () => {
     try {
+      const isConnected = await checkApiConnection();
+      if (!isConnected) {
+        throw new Error('Backend server is not available');
+      }
+
       const response = await fetch(`${API_BASE_URL}/devices`);
       if (!response.ok) {
         const errorData = await response.json();
         throw new Error(errorData.message || `HTTP error! status: ${response.status}`);
       }
-      return await response.json();
+      const jsonResponse = await response.json();
+      return jsonResponse.data;
     } catch (error) {
-      console.error('Error fetching devices:', error);
+      handleFetchError(error, 'devices');
       throw error;
     }
   },
 
   // Crear nuevo dispositivo con IP y variable de datos
-  async createDevice(deviceData: {
+  createDevice: async (deviceData: {
     name: string;
     type: string;
     peripherals: string[];
     ipAddress: string;
     dataVariable: string;
-  }) {
+  }) => {
     try {
+      const isConnected = await checkApiConnection();
+      if (!isConnected) {
+        throw new Error('Backend server is not available');
+      }
+
       const deviceId = `${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
 
       const response = await fetch(`${API_BASE_URL}/devices`, {
@@ -36,31 +67,29 @@ export const deviceService = {
         },
         body: JSON.stringify({
           deviceId,
-          name: deviceData.name.trim(),
-          type: deviceData.type,
-          peripherals: deviceData.peripherals,
-          ipAddress: deviceData.ipAddress,
-          dataVariable: deviceData.dataVariable,
+          ...deviceData,
           status: 'offline',
           readings: {
             temperature: null,
             humidity: null,
             pressure: null,
             distance: null,
-            acceleration: { x: null, y: null, z: null }
-          },
+            acceleration: { x: null, y: null, z: null },
+            relay: false
+          }
         }),
       });
 
-      const data = await response.json();
-
       if (!response.ok) {
-        throw new Error(data.message || 'Error al crear el dispositivo');
+        const errorData = await response.json();
+        throw new Error(errorData.message || 'Error al crear el dispositivo');
       }
 
-      return data;
+      const data = await response.json();
+      return data.data;
     } catch (error) {
       console.error('Error creating device:', error);
+      handleFetchError(error, 'devices');
       throw error;
     }
   },
@@ -103,14 +132,24 @@ export const deviceService = {
   },
 
   // Eliminar dispositivo
-  async deleteDevice(id: string) {
-    const response = await fetch(`${API_BASE_URL}/devices/${id}`, {
-      method: 'DELETE',
-    });
-    if (!response.ok) {
-      throw new Error('Error deleting device');
+  deleteDevice: async (deviceId: string) => {
+    try {
+      const response = await fetch(`${API_BASE_URL}/devices/${deviceId}`, {
+        method: 'DELETE',
+      });
+      
+      if (!response.ok) {
+        throw new Error(`Error: ${response.status}`);
+      }
+      
+      // Cerrar la conexión WebSocket si existe
+      deviceService.stopPolling(deviceId);
+      
+      return true;
+    } catch (error) {
+      console.error('Error deleting device:', error);
+      throw error;
     }
-    return true;
   },
 
   websockets: new Map<string, WebSocket>(),
@@ -122,24 +161,51 @@ export const deviceService = {
   async getDeviceData(device: Device) {
     const setupWebSocket = () => {
       try {
-        // Limpiar conexión existente
         this.cleanupWebSocket(device._id);
 
-        const ws = new WebSocket(`ws://${device.ipAddress}/ws`);
-        const isIntentionalClose = false;
+        if (!device.ipAddress) {
+          throw new Error('IP address is missing');
+        }
+
+        const wsUrl = `ws://${device.ipAddress}:81/ws`;
+        console.log(`Intentando conexión WebSocket a: ${wsUrl}`);
+
+        const ws = new WebSocket(wsUrl);
+        let isIntentionalClose = false;
+        let connectionTimeout: NodeJS.Timeout;
+
+        // Timeout más largo para la conexión inicial
+        connectionTimeout = setTimeout(() => {
+          if (ws.readyState !== WebSocket.OPEN) {
+            console.log('Timeout de conexión, cerrando socket');
+            isIntentionalClose = true;
+            ws.close();
+          }
+        }, 10000); // 10 segundos de timeout
 
         ws.onopen = async () => {
+          clearTimeout(connectionTimeout);
           console.log(`WebSocket conectado para ${device.name}`);
           this.reconnectAttempts.set(device._id, 0);
           
-          // Enviar estado inicial del relé
-          if (device.readings?.relay !== undefined) {
-            this.toggleRelay(device, device.readings.relay).catch(console.error);
+          // Esperar un momento antes de enviar el estado inicial
+          await new Promise(resolve => setTimeout(resolve, 1000));
+          
+          try {
+            // Actualizar estado del dispositivo
+            await this.updateDeviceReadings(device._id, {
+              status: 'online',
+              lastSeen: new Date(),
+              readings: device.readings
+            });
+          } catch (error) {
+            console.error('Error actualizando estado inicial:', error);
           }
         };
 
         ws.onclose = async (event) => {
-          console.log(`WebSocket cerrado para ${device.name}`, event.code, event.reason);
+          clearTimeout(connectionTimeout);
+          console.log(`WebSocket cerrado para ${device.name}`, event.code);
           
           if (!isIntentionalClose) {
             const attempts = (this.reconnectAttempts.get(device._id) || 0) + 1;
@@ -147,14 +213,25 @@ export const deviceService = {
             if (attempts <= this.maxReconnectAttempts) {
               console.log(`Intento de reconexión ${attempts}/${this.maxReconnectAttempts}`);
               this.reconnectAttempts.set(device._id, attempts);
-              setTimeout(() => this.getDeviceData(device), this.reconnectTimeout);
+              
+              const timeout = this.reconnectTimeout * Math.pow(2, attempts - 1);
+              setTimeout(() => {
+                if (!this.websockets.has(device._id)) {
+                  console.log(`Intentando reconexión para ${device.name}`);
+                  this.getDeviceData(device).catch(console.error);
+                }
+              }, timeout);
             } else {
               console.log(`Máximo de intentos alcanzado para ${device.name}`);
               await this.updateDeviceReadings(device._id, {
-                readings: { ...device.readings, relay: false },
                 status: 'offline',
                 lastSeen: new Date()
               });
+              
+              // Resetear intentos después de un tiempo
+              setTimeout(() => {
+                this.reconnectAttempts.set(device._id, 0);
+              }, 30000);
             }
           }
           
@@ -163,26 +240,58 @@ export const deviceService = {
 
         ws.onerror = (error) => {
           console.error(`Error WebSocket para ${device.name}:`, error);
+          if (ws.readyState === WebSocket.OPEN) {
+            isIntentionalClose = true;
+            ws.close();
+          }
         };
 
         ws.onmessage = async (event) => {
-          const data = JSON.parse(event.data);
-          console.log('Received WebSocket data:', data);
-          
-          const updates = {
-            readings: {
-              temperature: data.temperature,
-              humidity: data.humidity,
-              relay: data.relay
-            },
-            status: data.status || 'online',
-            lastSeen: new Date()
-          };
+          try {
+            const data = JSON.parse(event.data);
+            console.log(`Datos recibidos de ${device.name}:`, data);
+            
+            // Asegurarse de que los datos sean números
+            const temperature = typeof data.temperature === 'string' 
+              ? parseFloat(data.temperature) 
+              : data.temperature;
+            
+            const humidity = typeof data.humidity === 'string'
+              ? parseFloat(data.humidity)
+              : data.humidity;
 
-          await this.updateDeviceReadings(device._id, updates);
-          window.dispatchEvent(new CustomEvent('deviceUpdate', {
-            detail: { deviceId: device._id, updates }
-          }));
+            const updates = {
+              readings: {
+                temperature,
+                humidity,
+                relay: data.relay
+              },
+              status: 'online',
+              lastSeen: new Date()
+            };
+
+            console.log('Actualizando dispositivo con:', {
+              deviceId: device._id,
+              updates,
+              currentReadings: device.readings
+            });
+
+            await this.updateDeviceReadings(device._id, updates);
+            
+            // Disparar evento con los datos actualizados
+            window.dispatchEvent(new CustomEvent('deviceUpdate', {
+              detail: { 
+                deviceId: device._id, 
+                updates: {
+                  ...updates,
+                  _id: device._id,
+                  name: device.name
+                }
+              }
+            }));
+          } catch (error) {
+            console.error('Error procesando mensaje:', error);
+          }
         };
 
         this.websockets.set(device._id, ws);
@@ -199,10 +308,15 @@ export const deviceService = {
   cleanupWebSocket(deviceId: string) {
     const existingWs = this.websockets.get(deviceId);
     if (existingWs) {
-      if (existingWs.readyState === WebSocket.OPEN || existingWs.readyState === WebSocket.CONNECTING) {
-        existingWs.close(1000, 'Cleanup');
+      try {
+        if (existingWs.readyState === WebSocket.OPEN || existingWs.readyState === WebSocket.CONNECTING) {
+          existingWs.close(1000, 'Cleanup');
+        }
+      } catch (error) {
+        console.warn('Error closing WebSocket:', error);
+      } finally {
+        this.websockets.delete(deviceId);
       }
-      this.websockets.delete(deviceId);
     }
   },
 
@@ -257,6 +371,12 @@ export const deviceService = {
     // Iniciar una única conexión WebSocket
     this.getDeviceData(device).catch(error => {
       console.error(`Error initializing WebSocket for ${device.name}:`, error);
+      // Marcar el dispositivo como offline si hay error
+      this.updateDeviceReadings(device._id, {
+        readings: { ...device.readings },
+        status: 'offline',
+        lastSeen: new Date()
+      }).catch(console.error);
     });
   },
 
@@ -292,11 +412,25 @@ export const deviceService = {
 
   async toggleRelay(device: Device, state: boolean) {
     console.log('API Service: Intentando enviar comando de relé', {
-      device: device.name,
-      state: state,
+      deviceName: device.name,
+      deviceId: device._id,
+      currentState: device.readings?.relay,
+      newState: state,
       wsExists: this.websockets.has(device._id),
       wsState: this.websockets.get(device._id)?.readyState
     });
+
+    // Si no hay conexión WebSocket, intentar establecerla
+    if (!this.websockets.has(device._id)) {
+      try {
+        await this.getDeviceData(device);
+        // Esperar a que la conexión se establezca
+        await new Promise((resolve) => setTimeout(resolve, 1000));
+      } catch (error) {
+        console.error('Error al conectar con el dispositivo:', error);
+        throw new Error('No se pudo establecer conexión con el dispositivo');
+      }
+    }
 
     const ws = this.websockets.get(device._id);
     if (!ws || ws.readyState !== WebSocket.OPEN) {
@@ -304,31 +438,65 @@ export const deviceService = {
       throw new Error('No hay conexión con el dispositivo');
     }
 
-    try {
-      const message = { relay: state };
-      console.log('Enviando mensaje WebSocket:', JSON.stringify(message));
-      ws.send(JSON.stringify(message));
+    return new Promise((resolve, reject) => {
+      try {
+        const message = JSON.stringify({ relay: state });
+        console.log('Enviando mensaje WebSocket:', message);
+        
+        const timeout = setTimeout(() => {
+          reject(new Error('Timeout esperando respuesta del dispositivo'));
+        }, 5000);
 
-      // Actualizar el estado localmente sin esperar confirmación
-      const updates = {
-        readings: {
-          ...device.readings,
-          relay: state
-        },
-        status: 'online',
-        lastSeen: new Date()
-      };
+        const handleResponse = (event: MessageEvent) => {
+          try {
+            const response = JSON.parse(event.data);
+            console.log('Respuesta recibida del dispositivo:', {
+              deviceName: device.name,
+              response
+            });
+            
+            if (response.relay !== undefined) {
+              clearTimeout(timeout);
+              ws.removeEventListener('message', handleResponse);
+              
+              const updates = {
+                readings: {
+                  ...device.readings,
+                  relay: response.relay
+                },
+                status: 'online',
+                lastSeen: new Date()
+              };
 
-      await this.updateDeviceReadings(device._id, updates);
-      window.dispatchEvent(new CustomEvent('deviceUpdate', {
-        detail: { deviceId: device._id, updates }
-      }));
+              this.updateDeviceReadings(device._id, updates)
+                .then(() => {
+                  window.dispatchEvent(new CustomEvent('deviceUpdate', {
+                    detail: { 
+                      deviceId: device._id, 
+                      updates: {
+                        ...updates,
+                        _id: device._id,
+                        name: device.name
+                      }
+                    }
+                  }));
+                  resolve(response.relay);
+                })
+                .catch(reject);
+            }
+          } catch (error) {
+            console.error('Error procesando respuesta:', error);
+            reject(error);
+          }
+        };
 
-      return true;
-    } catch (error) {
-      console.error('Error toggling relay:', error);
-      throw error;
-    }
+        ws.addEventListener('message', handleResponse);
+        ws.send(message);
+      } catch (error) {
+        console.error('Error enviando comando:', error);
+        reject(error);
+      }
+    });
   }
 };
 
@@ -336,11 +504,17 @@ export const widgetService = {
   // Obtener todos los widgets
   getWidgets: async () => {
     try {
+      const isConnected = await checkApiConnection();
+      if (!isConnected) {
+        throw new Error('Backend server is not available');
+      }
+
       const response = await fetch(`${API_BASE_URL}/widgets`);
       if (!response.ok) {
         throw new Error(`Error: ${response.status}`);
       }
-      return await response.json();
+      const jsonResponse = await response.json();
+      return jsonResponse.data || []; // Asegurarse de devolver un array vacío si no hay datos
     } catch (error) {
       console.error('Error fetching widgets:', error);
       throw error;
@@ -354,6 +528,11 @@ export const widgetService = {
         throw new Error('El tipo de widget es requerido');
       }
 
+      // Normalizar el deviceId
+      const deviceId = typeof widgetData.device === 'object'
+        ? (widgetData.device as any)._id
+        : widgetData.device;
+
       const widgetId = `widget-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
 
       const response = await fetch(`${API_BASE_URL}/widgets`, {
@@ -365,8 +544,8 @@ export const widgetService = {
           widgetId,
           type: widgetData.type,
           title: widgetData.title.trim(),
-          device: widgetData.device,
-          config: widgetData.config
+          device: deviceId,
+          config: widgetData.config || {}
         }),
       });
 
@@ -375,7 +554,8 @@ export const widgetService = {
         throw new Error(errorData.message || 'Error al crear el widget');
       }
 
-      return await response.json();
+      const data = await response.json();
+      return data.data;
     } catch (error) {
       console.error('Error creating widget:', error);
       throw error;
@@ -412,7 +592,8 @@ export const widgetService = {
       if (!response.ok) {
         throw new Error(`Error: ${response.status}`);
       }
-      return await response.json();
+      const data = await response.json();
+      return data.data;
     } catch (error) {
       console.error('Error updating widget:', error);
       throw error;

@@ -3,20 +3,30 @@ export interface Device {
   deviceId: string;
   name: string;
   type: string;
-  status: 'online' | 'offline';
   peripherals: string[];
   ipAddress: string;
   dataVariable: string;
-  readings?: {
+  status: 'online' | 'offline';
+  lastSeen?: Date;
+  readings: {
     temperature?: number | null;
     humidity?: number | null;
+    pressure?: number | null;
+    distance?: number | null;
     relay?: boolean;
+    acceleration?: {
+      x: number | null;
+      y: number | null;
+      z: number | null;
+    };
   };
 }
 
+export type WidgetType = 'button' | 'thermometer';
+
 export interface WidgetConfig {
   chartType?: 'line' | 'bar' | 'gauge';
-  dataType?: 'temperature' | 'humidity' | 'pressure';
+  dataType?: 'temperature' | 'humidity';
   controlType?: 'toggle' | 'momentary';
 }
 
@@ -25,8 +35,13 @@ export interface Widget {
   widgetId: string;
   type: string;
   title: string;
-  device?: string;
-  config?: WidgetConfig;
+  device: string | { _id: string };
+  config?: {
+    chartType?: 'line' | 'bar' | 'gauge';
+    min?: number;
+    max?: number;
+    unit?: string;
+  };
 }
 
 // Interfaz para la creación de widgets (sin _id y widgetId que se generan después)

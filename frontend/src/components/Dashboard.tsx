@@ -30,6 +30,14 @@ const Dashboard: React.FC<DashboardProps> = ({
     };
   }, [updateDevice]);
 
+  const handleEditWidget = (widget: Widget) => {
+    onEditWidget(widget);
+  };
+
+  const handleDeleteWidget = (widgetId: string) => {
+    onDeleteWidget(widgetId);
+  };
+
   return (
     <div className="space-y-6">
       {/* Header */}
@@ -48,16 +56,32 @@ const Dashboard: React.FC<DashboardProps> = ({
 
       {/* Widgets Grid */}
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-6">
-        {widgets.map(widget => (
-          <div key={widget._id}>
-            <WidgetRenderer 
-              widget={widget} 
-              deviceData={devices.find(d => d._id === widget.device)}
-              onEdit={onEditWidget}
-              onDelete={onDeleteWidget}
+        {widgets.map(widget => {
+          const deviceId = typeof widget.device === 'object' 
+            ? (widget.device as any)._id 
+            : widget.device;
+          
+          const deviceData = devices.find(d => d._id === deviceId);
+          
+          console.log('Widget device data:', {
+            widgetId: widget._id,
+            deviceId,
+            deviceFound: !!deviceData,
+            deviceData,
+            originalDevice: widget.device
+          });
+          
+          return (
+            <WidgetRenderer
+              key={widget._id}
+              widget={widget}
+              deviceData={deviceData}
+              devices={devices}
+              onEdit={handleEditWidget}
+              onDelete={handleDeleteWidget}
             />
-          </div>
-        ))}
+          );
+        })}
       </div>
 
       {/* Empty State */}

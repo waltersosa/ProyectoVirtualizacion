@@ -2,52 +2,61 @@ import { Request, Response } from 'express';
 import Widget from '../models/Widget';
 
 export const widgetController = {
-  getAllWidgets: async (req: Request, res: Response): Promise<void> => {
+  getAllWidgets: async (_req: Request, res: Response): Promise<void> => {
     try {
-      const widgets = await Widget.find();
-      res.json(widgets);
+      const widgets = await Widget.find()
+        .populate('device')
+        .sort({ createdAt: -1 });
+
+      res.status(200).json({
+        success: true,
+        data: widgets
+      });
     } catch (error) {
-      res.status(500).json({ error: 'Error al obtener widgets' });
+      console.error('Error getting widgets:', error);
+      res.status(500).json({
+        success: false,
+        message: 'Error al obtener widgets',
+        error: error instanceof Error ? error.message : 'UNKNOWN_ERROR'
+      });
     }
   },
 
   createWidget: async (req: Request, res: Response): Promise<void> => {
     try {
-      const { type, title, device, widgetId, config } = req.body;
-      
-      if (!type || !widgetId) {
-        res.status(400).json({ 
-          message: 'type y widgetId son requeridos',
-          error: 'MISSING_REQUIRED_FIELDS'
+      const { type, title, device, config } = req.body;
+
+      if (!type || !title) {
+        res.status(400).json({
+          success: false,
+          message: 'El tipo y título son requeridos',
+          requiredFields: ['type', 'title']
         });
         return;
       }
 
       const widget = new Widget({
-        widgetId,
+        widgetId: `widget-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
         type,
         title: title.trim(),
         device,
-        config
+        config: config || {}
       });
 
       const savedWidget = await widget.save();
-      res.status(201).json(savedWidget);
-    } catch (error) {
-      console.error('Error al crear widget:', error);
-      res.status(500).json({ 
-        message: error instanceof Error ? error.message : 'Error al crear el widget',
-        error: 'CREATE_WIDGET_ERROR'
-      });
-    }
-  },
+      const populatedWidget = await Widget.findById(savedWidget._id).populate('device');
 
-  deleteWidget: async (req: Request, res: Response): Promise<void> => {
-    try {
-      await Widget.findByIdAndDelete(req.params.id);
-      res.status(204).send();
+      res.status(201).json({
+        success: true,
+        data: populatedWidget
+      });
     } catch (error) {
-      res.status(500).json({ error: 'Error al eliminar widget' });
+      console.error('Error creating widget:', error);
+      res.status(500).json({
+        success: false,
+        message: 'Error al crear el widget',
+        error: error instanceof Error ? error.message : 'UNKNOWN_ERROR'
+      });
     }
   },
 
@@ -60,16 +69,54 @@ export const widgetController = {
         id,
         updateData,
         { new: true }
-      );
+      ).populate('device');
 
       if (!updatedWidget) {
-        res.status(404).json({ message: 'Widget no encontrado' });
+        res.status(404).json({
+          success: false,
+          message: 'Widget no encontrado'
+        });
         return;
       }
 
-      res.json(updatedWidget);
+      res.status(200).json({
+        success: true,
+        data: updatedWidget
+      });
     } catch (error) {
-      res.status(500).json({ message: 'Error al actualizar el widget' });
+      console.error('Error updating widget:', error);
+      res.status(500).json({
+        success: false,
+        message: 'Error al actualizar el widget',
+        error: error instanceof Error ? error.message : 'UNKNOWN_ERROR'
+      });
+    }
+  },
+
+  deleteWidget: async (req: Request, res: Response): Promise<void> => {
+    try {
+      const { id } = req.params;
+      const deletedWidget = await Widget.findByIdAndDelete(id);
+
+      if (!deletedWidget) {
+        res.status(404).json({
+          success: false,
+          message: 'Widget no encontrado'
+        });
+        return;
+      }
+
+      res.status(200).json({
+        success: true,
+        message: 'Widget eliminado correctamente'
+      });
+    } catch (error) {
+      console.error('Error deleting widget:', error);
+      res.status(500).json({
+        success: false,
+        message: 'Error al eliminar el widget',
+        error: error instanceof Error ? error.message : 'UNKNOWN_ERROR'
+      });
     }
   }
 }; 

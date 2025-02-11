@@ -1,60 +1,48 @@
 import React from 'react';
-import { Thermometer, Droplets, Wifi, WifiOff } from 'lucide-react';
+import { Thermometer, Droplets } from 'lucide-react';
+import { commonStyles } from '../../styles/common';
 
 interface ThermometerWidgetProps {
   title: string;
-  deviceId: string;
-  readings?: {
-    temperature?: number | null;
-    humidity?: number | null;
-  };
-  status?: string;
+  temperature?: number | null;
+  humidity?: number | null;
+  isOnline: boolean;
 }
 
-export const ThermometerWidget: React.FC<ThermometerWidgetProps> = ({ 
-  title, 
-  readings,
-  status 
+export const ThermometerWidget: React.FC<ThermometerWidgetProps> = ({
+  title,
+  temperature,
+  humidity,
+  isOnline
 }) => {
-  const temperature = readings?.temperature ?? 0;
-  const humidity = readings?.humidity ?? 0;
-  const isOnline = status === 'online';
+  console.log('ThermometerWidget props:', { temperature, humidity, isOnline }); // Para depuración
 
   return (
-    <div className="bg-gray-800 p-4 rounded-xl">
-      <div className="flex justify-between items-center mb-4">
-        <h3 className="text-lg font-semibold">{title}</h3>
-        {isOnline ? (
-          <div className="flex items-center text-green-400">
-            <Wifi className="w-4 h-4 mr-1" />
-            <span className="text-sm">Online</span>
+    <div className={commonStyles.widget.reading.container}>
+      <div className={commonStyles.widget.reading.item}>
+        <div className={commonStyles.widget.reading.label}>
+          <div className={commonStyles.widget.reading.icon.temperature}>
+            <Thermometer className="w-4 h-4" />
           </div>
-        ) : (
-          <div className="flex items-center text-red-400">
-            <WifiOff className="w-4 h-4 mr-1" />
-            <span className="text-sm">Offline</span>
-          </div>
-        )}
-      </div>
-      <div className="space-y-4">
-        <div className="flex items-center justify-between bg-gray-700/50 p-3 rounded-lg">
-          <div className="flex items-center gap-2">
-            <Thermometer className="w-5 h-5 text-red-400" />
-            <span className="text-gray-300">Temperatura</span>
-          </div>
-          <div className="text-2xl font-bold text-red-400">
-            {temperature}°C
-          </div>
+          <span>Temperatura</span>
         </div>
-
-        <div className="flex items-center justify-between bg-gray-700/50 p-3 rounded-lg">
-          <div className="flex items-center gap-2">
-            <Droplets className="w-5 h-5 text-blue-400" />
-            <span className="text-gray-300">Humedad</span>
+        <div className={commonStyles.widget.reading.value.temperature}>
+          {isOnline && temperature !== undefined && temperature !== null 
+            ? `${temperature.toFixed(1)}°C` 
+            : '--'}
+        </div>
+      </div>
+      <div className={commonStyles.widget.reading.item}>
+        <div className={commonStyles.widget.reading.label}>
+          <div className={commonStyles.widget.reading.icon.humidity}>
+            <Droplets className="w-4 h-4" />
           </div>
-          <div className="text-2xl font-bold text-blue-400">
-            {humidity}%
-          </div>
+          <span>Humedad</span>
+        </div>
+        <div className={commonStyles.widget.reading.value.humidity}>
+          {isOnline && humidity !== undefined && humidity !== null 
+            ? `${humidity.toFixed(1)}%` 
+            : '--'}
         </div>
       </div>
     </div>

@@ -3,12 +3,29 @@ import Device from '../models/Device';
 import mongoose from 'mongoose';
 
 export const deviceController = {
-  getAllDevices: async (req: Request, res: Response): Promise<void> => {
+  getAllDevices: async (_req: Request, res: Response): Promise<void> => {
     try {
-      const devices = await Device.find();
-      res.json(devices);
+      const devices = await Device.find().sort({ createdAt: -1 });
+      
+      // Asegurarse de que cada dispositivo tenga un estado inicial del relay
+      const devicesWithState = devices.map(device => ({
+        ...device.toObject(),
+        readings: {
+          ...device.readings,
+          relay: device.readings?.relay ?? false // Valor por defecto false si no existe
+        }
+      }));
+
+      res.status(200).json({
+        success: true,
+        data: devicesWithState
+      });
     } catch (error) {
-      res.status(500).json({ error: 'Error al obtener dispositivos' });
+      res.status(500).json({
+        success: false,
+        message: 'Error al obtener dispositivos',
+        error: error instanceof Error ? error.message : 'UNKNOWN_ERROR'
+      });
     }
   },
 
@@ -22,15 +39,28 @@ export const deviceController = {
         ipAddress, 
         dataVariable 
       } = req.body;
-      
-      if (!deviceId || !ipAddress || !dataVariable) {
+
+      // Validaciones
+      if (!name || !type || !deviceId || !ipAddress || !dataVariable) {
         res.status(400).json({ 
-          message: 'deviceId, ipAddress y dataVariable son requeridos',
-          error: 'MISSING_REQUIRED_FIELDS'
+          success: false,
+          message: 'Faltan campos requeridos',
+          requiredFields: ['name', 'type', 'deviceId', 'ipAddress', 'dataVariable']
         });
         return;
       }
 
+      // Verificar si ya existe un dispositivo con el mismo deviceId
+      const existingDevice = await Device.findOne({ deviceId });
+      if (existingDevice) {
+        res.status(400).json({
+          success: false,
+          message: 'Ya existe un dispositivo con ese ID'
+        });
+        return;
+      }
+
+      // Crear el dispositivo
       const device = new Device({
         deviceId,
         name: name.trim(),
@@ -44,15 +74,21 @@ export const deviceController = {
           humidity: null,
           pressure: null,
           distance: null,
-          acceleration: { x: null, y: null, z: null }
+          acceleration: { x: null, y: null, z: null },
+          relay: false
         }
       });
 
       const savedDevice = await device.save();
-      res.status(201).json(savedDevice);
+      
+      res.status(201).json({
+        success: true,
+        data: savedDevice
+      });
     } catch (error) {
-      console.error('Error al crear dispositivo:', error);
-      res.status(500).json({ 
+      console.error('Error creating device:', error);
+      res.status(500).json({
+        success: false,
         message: error instanceof Error ? error.message : 'Error al crear el dispositivo',
         error: 'CREATE_DEVICE_ERROR'
       });

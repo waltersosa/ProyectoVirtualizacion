@@ -14,14 +14,8 @@ interface AddWidgetModalProps {
 }
 
 const widgetTypes = [
-  { id: 'gauge', name: 'Gauge', icon: Gauge, defaultConfig: { chartType: 'gauge' as const, dataType: 'temperature' as const } },
-  { id: 'thermometer', name: 'Thermometer', icon: Thermometer, defaultConfig: { chartType: 'line' as const, dataType: 'temperature' as const } },
-  { id: 'dht11', name: 'DHT11 Sensor', icon: Thermometer },
-  { id: 'control', name: 'Control Button', icon: Power, defaultConfig: { controlType: 'toggle' as const } },
-  { id: 'map', name: 'Map', icon: Map },
-  { id: 'frequency', name: 'Frequency Table', icon: Table },
-  { id: 'indicator', name: 'Status Indicator', icon: Activity },
-  { id: 'slider', name: 'Control Slider', icon: Sliders },
+  { value: 'button', label: 'Botón de Control' },
+  { value: 'thermometer', label: 'Termómetro' }
 ];
 
 export const AddWidgetModal: React.FC<AddWidgetModalProps> = ({
@@ -64,7 +58,7 @@ export const AddWidgetModal: React.FC<AddWidgetModalProps> = ({
   }, [isOpen]);
 
   const handleTypeSelect = (typeId: string) => {
-    const selectedType = widgetTypes.find(type => type.id === typeId);
+    const selectedType = widgetTypes.find(type => type.value === typeId);
     setWidgetData({
       ...widgetData,
       type: typeId,
@@ -106,19 +100,18 @@ export const AddWidgetModal: React.FC<AddWidgetModalProps> = ({
               Widget Type
             </label>
             <div className="grid grid-cols-2 gap-2">
-              {widgetTypes.map(({ id, name, icon: Icon }) => (
+              {widgetTypes.map(({ value, label }) => (
                 <button
-                  key={id}
+                  key={value}
                   type="button"
-                  onClick={() => handleTypeSelect(id)}
+                  onClick={() => handleTypeSelect(value)}
                   className={`p-3 rounded-lg flex flex-col items-center gap-2 transition-colors ${
-                    widgetData.type === id
+                    widgetData.type === value
                       ? 'bg-blue-500 text-white'
                       : 'bg-gray-700 text-gray-300 hover:bg-gray-600'
                   }`}
                 >
-                  <Icon className="w-6 h-6" />
-                  <span className="text-sm">{name}</span>
+                  <span className="text-sm">{label}</span>
                 </button>
               ))}
             </div>

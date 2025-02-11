@@ -1,59 +1,83 @@
-import mongoose from 'mongoose';
+import mongoose, { Schema, Document } from 'mongoose';
 
-interface IWidget {
+export interface IWidget extends Document {
   widgetId: string;
-  type: string;
+  type: 'button' | 'thermometer';  // Solo estos dos tipos permitidos
   title: string;
   device?: string;
   config?: {
     chartType?: 'line' | 'bar' | 'gauge';
-    dataType?: 'temperature' | 'humidity' | 'pressure';
+    dataType?: 'temperature' | 'humidity';
+    controlType?: 'toggle' | 'momentary';
   };
 }
 
-const widgetSchema = new mongoose.Schema<IWidget>({
-  widgetId: {
-    type: String,
+const WidgetSchema: Schema = new Schema({
+  widgetId: { type: String, required: true, unique: true },
+  type: { 
+    type: String, 
     required: true,
-    unique: true
+    enum: ['button', 'thermometer']
   },
-  type: {
-    type: String,
-    required: true,
-    enum: ['gauge', 'chart', 'control', 'dht11', 'thermometer', 'relay']
-  },
-  title: {
-    type: String,
-    required: true
-  },
-  device: {
-    type: String,
-    required: false
-  },
+  title: { type: String, required: true },
+  device: { type: Schema.Types.ObjectId, ref: 'Device' },
   config: {
-    chartType: {
-      type: String,
+    chartType: { 
+      type: String, 
       enum: ['line', 'bar', 'gauge'],
-      required: false
+      default: null 
     },
-    dataType: {
-      type: String,
-      enum: ['temperature', 'humidity', 'pressure'],
-      required: false
+    dataType: { 
+      type: String, 
+      enum: ['temperature', 'humidity'],
+      default: null 
+    },
+    controlType: { 
+      type: String, 
+      enum: ['toggle', 'momentary'],
+      default: null 
     }
   }
+}, {
+  timestamps: true
 });
 
+// Índices para mejorar el rendimiento
+WidgetSchema.index({ widgetId: 1 }, { unique: true });
+WidgetSchema.index({ type: 1 });
+WidgetSchema.index({ device: 1 });
+
 // Middleware pre-save para validar la configuración según el tipo
-widgetSchema.pre('save', function(next) {
-  if (this.type === 'chart') {
-    if (!this.config || !this.config.chartType || !this.config.dataType) {
-      next(new Error('Los widgets de tipo chart requieren configuración de chartType y dataType'));
-      return;
-    }
+WidgetSchema.pre('save', function(next) {
+  // Validar que el dispositivo esté presente para todos los tipos de widgets
+  if (!this.device) {
+    next(new Error('Todos los widgets requieren un dispositivo asociado'));
+    return;
   }
+
+  // Validaciones específicas según el tipo
+  switch (this.type) {
+    case 'thermometer':
+      if (!this.config) {
+        this.config = {
+          chartType: 'gauge',
+          dataType: 'temperature'
+        };
+      }
+      break;
+    case 'button':
+      if (!this.config) {
+        this.config = {
+          controlType: 'toggle'
+        };
+      }
+      break;
+    default:
+      next(new Error('Tipo de widget no soportado'));
+      return;
+  }
+
   next();
 });
 
-const Widget = mongoose.model<IWidget>('Widget', widgetSchema);
-export default Widget; 
+export default mongoose.model<IWidget>('Widget', WidgetSchema); 

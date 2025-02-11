@@ -11,6 +11,7 @@ import { Device, Widget, CreateWidgetData, CreateDeviceData } from './types/type
 import { Plus } from 'lucide-react';
 import { DeviceProvider } from './context/DeviceContext';
 import { ThemeProvider } from './context/ThemeContext';
+import { WidgetRenderer } from './components/WidgetRenderer';
 
 function App() {
   const [isAddWidgetModalOpen, setIsAddWidgetModalOpen] = useState(false);
@@ -26,17 +27,21 @@ function App() {
     const setupDeviceConnections = async () => {
       try {
         const loadedDevices = await deviceService.getDevices();
-        setDevices(loadedDevices);
-        
-        // Limpiar conexiones existentes antes de iniciar nuevas
-        deviceService.clearAllConnections();
-        
-        // Iniciar conexiones WebSocket una sola vez
-        loadedDevices.forEach((device: Device) => {
-          if (!deviceService.websockets.has(device._id)) {
-            deviceService.startPolling(device);
-          }
-        });
+        if (Array.isArray(loadedDevices)) {
+          setDevices(loadedDevices);
+          
+          // Limpiar conexiones existentes antes de iniciar nuevas
+          deviceService.clearAllConnections();
+          
+          // Iniciar conexiones WebSocket una sola vez
+          loadedDevices.forEach((device: Device) => {
+            if (!deviceService.websockets.has(device._id)) {
+              deviceService.startPolling(device);
+            }
+          });
+        } else {
+          console.error('Loaded devices is not an array:', loadedDevices);
+        }
       } catch (error) {
         console.error('Error setting up devices:', error);
       }
@@ -44,15 +49,100 @@ function App() {
 
     setupDeviceConnections();
 
-    // Limpiar conexiones al desmontar
     return () => {
       deviceService.clearAllConnections();
     };
-  }, []); // Solo ejecutar una vez al iniciar la app
+  }, []);
 
   useEffect(() => {
     loadWidgets();
   }, []);
+
+  // Efecto para actualización automática de datos
+  useEffect(() => {
+    // Función para actualizar todo
+    const updateAll = async () => {
+      try {
+        // Actualizar widgets
+        const loadedWidgets = await widgetService.getWidgets();
+        setWidgets(loadedWidgets);
+
+        // Actualizar dispositivos
+        const loadedDevices = await deviceService.getDevices();
+        if (Array.isArray(loadedDevices)) {
+          setDevices(prevDevices => {
+            // Mantener las conexiones WebSocket existentes
+            const updatedDevices = loadedDevices.map(newDevice => {
+              const existingDevice = prevDevices.find(d => d._id === newDevice._id);
+              return {
+                ...newDevice,
+                status: existingDevice?.status || newDevice.status,
+                readings: {
+                  ...existingDevice?.readings,
+                  ...newDevice.readings
+                }
+              };
+            });
+            return updatedDevices;
+          });
+        }
+      } catch (error) {
+        console.error('Error updating data:', error);
+      }
+    };
+
+    // Actualización inicial
+    updateAll();
+
+    // Configurar intervalo de actualización
+    const updateInterval = setInterval(updateAll, 5000); // Actualizar cada 5 segundos
+
+    // Configurar WebSocket para actualizaciones en tiempo real
+    const handleDeviceUpdate = (event: CustomEvent) => {
+      const { deviceId, updates } = event.detail;
+      console.log('Device update received:', deviceId, updates);
+      
+      setDevices(prevDevices => 
+        prevDevices.map(device => {
+          if (device._id === deviceId) {
+            console.log('Updating device:', device.name, {
+              old: device.readings,
+              new: updates.readings
+            });
+            return { 
+              ...device, 
+              ...updates, 
+              status: updates.status || device.status,
+              readings: {
+                ...device.readings,
+                ...updates.readings
+              }
+            };
+          }
+          return device;
+        })
+      );
+    };
+
+    // Suscribirse a eventos de actualización
+    window.addEventListener('deviceUpdate', handleDeviceUpdate as EventListener);
+
+    // Limpiar al desmontar
+    return () => {
+      clearInterval(updateInterval);
+      window.removeEventListener('deviceUpdate', handleDeviceUpdate as EventListener);
+      deviceService.clearAllConnections();
+    };
+  }, []);
+
+  // Efecto para manejar conexiones WebSocket de dispositivos
+  useEffect(() => {
+    devices.forEach(device => {
+      if (!deviceService.websockets.has(device._id)) {
+        deviceService.startPolling(device);
+      }
+    });
+  }, [devices]);
 
   const loadWidgets = async () => {
     try {
@@ -66,7 +156,7 @@ function App() {
   const handleDeleteWidget = async (widgetId: string) => {
     try {
       await widgetService.deleteWidget(widgetId);
-      setWidgets(widgets.filter(widget => widget._id !== widgetId));
+      setWidgets(widgets.filter(w => w._id !== widgetId));
     } catch (error) {
       console.error('Error deleting widget:', error);
     }
@@ -111,11 +201,10 @@ function App() {
     setIsEditWidgetModalOpen(true);
   };
 
-  const handleUpdateWidget = async (widgetData: Widget) => {
+  const handleUpdateWidget = async (updatedWidget: Widget) => {
     try {
-      // Aquí deberías tener un método en widgetService para actualizar
-      const updatedWidget = await widgetService.updateWidget(widgetData);
-      setWidgets(widgets.map(w => w._id === updatedWidget._id ? updatedWidget : w));
+      const result = await widgetService.updateWidget(updatedWidget);
+      setWidgets(widgets.map(w => w._id === result._id ? result : w));
       setIsEditWidgetModalOpen(false);
       setEditingWidget(null);
     } catch (error) {
@@ -178,43 +267,58 @@ function App() {
   return (
     <ThemeProvider>
       <DeviceProvider>
-        <RouterProvider router={router} />
-        {/* Modales */}
-        {isAddDeviceModalOpen && (
-          <AddDeviceModal 
-            isOpen={isAddDeviceModalOpen} 
-            onClose={() => setIsAddDeviceModalOpen(false)} 
-            onAdd={handleAddDevice} 
-          />
-        )}
-        {isEditDeviceModalOpen && (
-          <AddDeviceModal 
-            isOpen={isEditDeviceModalOpen} 
-            onClose={() => setIsEditDeviceModalOpen(false)} 
-            onAdd={handleAddDevice} 
-            deviceToEdit={editingDevice}
-          />
-        )}
-        {isAddWidgetModalOpen && (
-          <AddWidgetModal 
-            isOpen={isAddWidgetModalOpen} 
-            onClose={() => setIsAddWidgetModalOpen(false)} 
-            onAdd={handleAddWidget}
-            devices={devices} 
-          />
-        )}
-        {isEditWidgetModalOpen && editingWidget && (
-          <AddWidgetModal 
-            isOpen={isEditWidgetModalOpen}
-            onClose={() => {
-              setIsEditWidgetModalOpen(false);
-              setEditingWidget(null);
-            }}
-            onUpdate={handleUpdateWidget}
-            devices={devices}
-            widgetToEdit={editingWidget}
-          />
-        )}
+        <div className="min-h-screen bg-gray-900">
+          <RouterProvider router={router} />
+          {/* Modales */}
+          {isAddDeviceModalOpen && (
+            <AddDeviceModal 
+              isOpen={isAddDeviceModalOpen} 
+              onClose={() => setIsAddDeviceModalOpen(false)} 
+              onAdd={handleAddDevice} 
+            />
+          )}
+          {isEditDeviceModalOpen && (
+            <AddDeviceModal 
+              isOpen={isEditDeviceModalOpen} 
+              onClose={() => setIsEditDeviceModalOpen(false)} 
+              onAdd={handleAddDevice} 
+              deviceToEdit={editingDevice}
+            />
+          )}
+          {isAddWidgetModalOpen && (
+            <AddWidgetModal 
+              isOpen={isAddWidgetModalOpen} 
+              onClose={() => setIsAddWidgetModalOpen(false)} 
+              onAdd={handleAddWidget}
+              devices={devices} 
+            />
+          )}
+          {isEditWidgetModalOpen && editingWidget && (
+            <AddWidgetModal 
+              isOpen={isEditWidgetModalOpen}
+              onClose={() => {
+                setIsEditWidgetModalOpen(false);
+                setEditingWidget(null);
+              }}
+              onUpdate={handleUpdateWidget}
+              devices={devices}
+              widgetToEdit={editingWidget}
+            />
+          )}
+          {/* Widgets Grid con auto-refresh */}
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6 p-6">
+            {widgets.map(widget => (
+              <WidgetRenderer
+                key={widget._id}
+                widget={widget}
+                deviceData={devices.find(d => d._id === widget.device)}
+                devices={devices}
+                onEdit={handleEditWidget}
+                onDelete={handleDeleteWidget}
+              />
+            ))}
+          </div>
+        </div>
       </DeviceProvider>
     </ThemeProvider>
   );
